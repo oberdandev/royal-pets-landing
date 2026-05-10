@@ -17,122 +17,29 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-const HF_TOKEN = process.env.HUGGINGFACE_API_KEY || '';
-const HF_API_URL = 'https://api-inference.huggingface.co/models';
-
-// Modelos para tentar (image-to-image)
-const IMAGE_TO_IMAGE_MODELS = [
-  'timbrooks/instruct-pix2pix',
-  'lllyasviel/sd-controlnet-canny',
-  'lllyasviel/sd-controlnet-depth',
-];
-
-// Modelos para tentar (text-to-image fallback)
-const TEXT_TO_IMAGE_MODELS = [
-  'stabilityai/stable-diffusion-2-1',
-  'prompthero/openjourney-v4',
-  'CompVis/stable-diffusion-v1-4',
-  'runwayml/stable-diffusion-v1-5',
-];
+const STABILITY_API_KEY = process.env.STABILITY_API_KEY || '';
+const STABILITY_URL = 'https://api.stability.ai/v2beta/stable-image/generate/core';
 
 function buildPrompt(petName: string, petSex: string): string {
-  const title = petSex === 'macho' ? 'Rei' : 'Rainha';
-  const article = petSex === 'macho' ? 'o' : 'a';
+  const title = petSex === 'macho' ? 'King' : 'Queen';
 
-  return `A majestic Renaissance royal ${title} portrait of a dog.
+  return `A majestic Renaissance royal ${title} portrait of a dog. 
 
-STRICT RULES:
-- Keep EXACTLY the dog's facial features: snout shape, eyes, nose, ears, markings and expression
-- The fur color must be identical to the original
-- The dog must be clearly recognizable as the same from the photo
+The dog wears elaborate royal attire: ${petSex === 'macho'
+    ? 'a blood-red velvet royal cloak with white fur lining, elaborate gold shoulder pads, a masculine crown adorned with rubies and emeralds, a royal medallion on the chest'
+    : 'a royal gala dress in royal blue or deep purple velvet, a high white lace collar, a feminine tiara with diamonds and pearls, a sapphire necklace, gold bracelets'}.
 
-ARTISTIC STYLE:
-- Classic 17th century oil painting, visible canvas texture
-- Style: Velázquez and Rembrandt, official court portrait
-- Lighting: soft light from the left, dramatic shadows (chiaroscuro)
-- Palette: warm tones, golds, deep reds, royal blue
+Richly embroidered royal clothes with gold threads. 
 
-ROYAL ATTIRE:
-- ${petSex === 'macho'
-    ? 'Royal cloak of blood-red velvet with white fur lining, elaborate gold shoulder pads, masculine crown adorned with rubies and emeralds, royal medallion on chest'
-    : 'Royal gala dress in royal blue or deep purple velvet, high white lace collar, feminine tiara with diamonds and pearls, sapphire necklace, gold bracelets'}
-- Richly embroidered royal clothes with gold threads
+The dog sits majestically on an ornate golden throne. 
 
-SCENE:
-- Majestic pose sitting ${article} on ornate golden throne with ${petSex === 'macho' ? 'red' : 'purple'} velvet
-- Background: palace chamber with heavy velvet curtains, marble columns and ornate arches
-- In background: luxurious tapestry with royal coat of arms
+Background: palace chamber with heavy velvet curtains, marble columns and ornate arches, luxurious tapestry with royal coat of arms. 
 
-FRAME:
-- Ornate baroque golden frame visible around the painting
-- Gold carved details with floral and heraldic motifs
+Ornate baroque golden frame visible around the painting. 
 
-QUALITY:
-- High resolution for large format printing
-- Sharp details in fur, jewels and fabric textures
-- Professional museum finish`;
-}
+Classic 17th century oil painting style, visible canvas texture, Velázquez and Rembrandt style, soft light from the left, dramatic chiaroscuro shadows, warm tones with golds, deep reds, royal blue. 
 
-async function tryImageToImage(imageBuffer: Buffer, prompt: string): Promise<Buffer | null> {
-  for (const model of IMAGE_TO_IMAGE_MODELS) {
-    try {
-      console.log(`[HF] Tentando image-to-image com ${model}...`);
-
-      const formData = new FormData();
-      const blob = new Blob([imageBuffer]);
-      formData.append('image', blob);
-      formData.append('prompt', prompt);
-
-      const response = await fetch(`${HF_API_URL}/${model}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${HF_TOKEN}`,
-        },
-        body: formData,
-      });
-
-      if (response.ok) {
-        const result = await response.arrayBuffer();
-        console.log(`[HF] Sucesso com ${model}`);
-        return Buffer.from(result);
-      } else {
-        const error = await response.text();
-        console.log(`[HF] Falha com ${model}: ${error.substring(0, 200)}`);
-      }
-    } catch (e: any) {
-      console.log(`[HF] Erro com ${model}: ${e.message}`);
-    }
-  }
-  return null;
-}
-
-async function tryTextToImage(prompt: string): Promise<Buffer | null> {
-  for (const model of TEXT_TO_IMAGE_MODELS) {
-    try {
-      console.log(`[HF] Tentando text-to-image com ${model}...`);
-
-      const response = await fetch(`${HF_API_URL}/${model}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${HF_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ inputs: prompt }),
-      });
-
-      if (response.ok) {
-        const result = await response.arrayBuffer();
-        console.log(`[HF] Sucesso com ${model}`);
-        return Buffer.from(result);
-      } else {
-        const error = await response.text();
-        console.log(`[HF] Falha com ${model}: ${error.substring(0, 200)}`);
-      }
-    } catch (e: any) {
-      console.log(`[HF] Erro com ${model}: ${e.message}`);
-    }
-  }
-  return null;
+High resolution, sharp details in fur, jewels and fabric textures, professional museum finish.`;
 }
 
 app.post('/api/generate-portrait', upload.single('photo'), async (req, res) => {
@@ -145,29 +52,49 @@ app.post('/api/generate-portrait', upload.single('photo'), async (req, res) => {
       return res.status(400).json({ error: 'Nenhuma foto enviada' });
     }
 
-    console.log(`[API] Gerando retrato para ${petName} (${petSex}) via Hugging Face`);
-
-    const prompt = buildPrompt(petName, petSex);
-
-    // Tenta image-to-image primeiro
-    let imageBuffer = await tryImageToImage(file.buffer, prompt);
-
-    // Se falhar, tenta text-to-image
-    if (!imageBuffer) {
-      console.log('[API] Image-to-image falhou, tentando text-to-image...');
-      imageBuffer = await tryTextToImage(prompt);
-    }
-
-    if (!imageBuffer) {
+    if (!STABILITY_API_KEY || STABILITY_API_KEY === 'sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX') {
       return res.status(500).json({
-        error: 'Nenhum modelo disponível no momento. Tente novamente em alguns minutos.',
-        details: 'Todos os modelos do Hugging Face estão indisponíveis ou em fila.',
+        error: 'API key da Stability AI não configurada.',
+        details: 'Adicione sua STABILITY_API_KEY no arquivo .env',
       });
     }
 
+    console.log(`[API] Gerando retrato para ${petName} (${petSex}) via Stability AI`);
+
+    const prompt = buildPrompt(petName, petSex);
+
+    // Monta o FormData para a Stability AI
+    const formData = new FormData();
+    formData.append('image', new Blob([file.buffer], { type: file.mimetype }), file.originalname || 'input.jpg');
+    formData.append('prompt', prompt);
+    formData.append('mode', 'image-to-image');
+    formData.append('strength', '0.5');
+    formData.append('output_format', 'png');
+    formData.append('aspect_ratio', '1:1');
+
+    const response = await fetch(STABILITY_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${STABILITY_API_KEY}`,
+        Accept: 'image/*',
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[API] Stability AI erro ${response.status}:`, errorText);
+      return res.status(response.status).json({
+        error: 'Erro na API da Stability AI',
+        details: errorText,
+      });
+    }
+
+    // A resposta vem como imagem binária diretamente
+    const imageBuffer = Buffer.from(await response.arrayBuffer());
     const base64 = imageBuffer.toString('base64');
 
-    console.log('[API] Retrato gerado com sucesso via Hugging Face');
+    console.log('[API] Retrato gerado com sucesso via Stability AI');
 
     res.json({
       success: true,
